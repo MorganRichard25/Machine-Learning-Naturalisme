@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Renomme les romans de Z_vs_N sous la forme Auteur_Titre.txt.
+
+Par securite, le script ne modifie rien sans l'option --appliquer.
+
+Exemples :
+    python3 renommer_romans.py /chemin/vers/Z_vs_N
+    python3 renommer_romans.py /chemin/vers/Z_vs_N --appliquer
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import sys
+import unicodedata
+import uuid
+
+
+DOSSIER_PAR_DEFAUT = Path(
+    "/Users/morganrichard/AFC-Naturalisme/zola_vs_nat/Z_vs_N"
+)
+
+
+@dataclass(frozen=True)
+class Livre:
+    auteur: str
+    titre: str
+
+
+# Le premier champ est le nom actuel sans l'extension .txt. Les titres ont ete
+# verifies dans des catalogues bibliographiques et des editions numerisees.
+ENTREES: tuple[tuple[str, str, str], ...] = (
+    # Emile Zola : tous les fichiers marques « _clean » dans ce corpus.
+    ("1865_La_confession_de_Claude._clean", "Émile Zola", "La Confession de Claude"),
+    ("1866_Le_voeu_d_une_morte._clean", "Émile Zola", "Le Vœu d'une morte"),
+    ("1867_Les_mysteres_de_Marseille._clean", "Émile Zola", "Les Mystères de Marseille"),
+    ("1867_Therese_Raquin._clean", "Émile Zola", "Thérèse Raquin"),
+    ("1868_Madeleine_Ferat._clean", "Émile Zola", "Madeleine Férat"),
+    ("1871_1_La_fortune_des_Rougon._clean", "Émile Zola", "La Fortune des Rougon"),
+    ("1871_2_La_curee._clean", "Émile Zola", "La Curée"),
+    ("1873_3_Le_ventre_de_Paris._clean", "Émile Zola", "Le Ventre de Paris"),
+    ("1874_4_La_conquete_de_Plassans._clean", "Émile Zola", "La Conquête de Plassans"),
+    ("1875_5_La_faute_de_l_abbe_Mouret._clean", "Émile Zola", "La Faute de l'abbé Mouret"),
+    ("1876_6_Son_Excellence_Eugene_Rougon._clean", "Émile Zola", "Son Excellence Eugène Rougon"),
+    ("1877_7_L_assommoir._clean", "Émile Zola", "L'Assommoir"),
+    ("1878_8_Une_page_d_amour._clean", "Émile Zola", "Une page d'amour"),
+    ("1880_9_Nana._clean", "Émile Zola", "Nana"),
+    ("1882_10_Pot-bouille._clean", "Émile Zola", "Pot-Bouille"),
+    ("1883_11_Au_Bonheur_des_dames._clean", "Émile Zola", "Au Bonheur des dames"),
+    ("1884_12_La_joie_de_vivre._clean", "Émile Zola", "La Joie de vivre"),
+    ("1885_13_Germinal._clean", "Émile Zola", "Germinal"),
+    ("1886_14_L_oeuvre._clean", "Émile Zola", "L'Œuvre"),
+    ("1887_15_La_terre._clean", "Émile Zola", "La Terre"),
+    ("1888_16_Le_reve._clean", "Émile Zola", "Le Rêve"),
+    ("1890_17_La_bete_humaine._clean", "Émile Zola", "La Bête humaine"),
+    ("1891_18_L_argent._clean", "Émile Zola", "L'Argent"),
+    ("1892_19_La_debacle._clean", "Émile Zola", "La Débâcle"),
+    ("1893_20_Le_docteur_Pascal._clean", "Émile Zola", "Le Docteur Pascal"),
+    ("1894_1_Lourdes._clean", "Émile Zola", "Lourdes"),
+    ("1896_2_Rome._clean", "Émile Zola", "Rome"),
+    ("1898_3_Paris._clean", "Émile Zola", "Paris"),
+    ("1899_1_Fecondite._clean", "Émile Zola", "Fécondité"),
+    ("1901_2_Travail._clean", "Émile Zola", "Travail"),
+    ("1903_3_Verite._clean", "Émile Zola", "Vérité"),
+
+    # Autres auteurs du corpus.
+    ("A REBOURS", "Joris-Karl Huysmans", "À rebours"),
+    ("Amis de la nature", "Champfleury", "Les Amis de la nature"),
+    ("Barbier de Paris", "Paul de Kock", "Le Barbier de Paris"),
+    ("Bel-Ami", "Guy de Maupassant", "Bel-Ami"),
+    ("Charles Demailly", "Edmond et Jules de Goncourt", "Charles Demailly"),
+    (
+        "Combats de Françoise du Quesnoy",
+        "Louis-Émile-Edmond Duranty",
+        "Les Combats de Françoise du Quesnoy",
+    ),
+    ("Confessions de Sylvius", "Champfleury", "Les Confessions de Sylvius"),
+    ("Demoiselle du cinquième", "Paul de Kock", "La Demoiselle du cinquième"),
+    ("Dingo", "Octave Mirbeau", "Dingo"),
+    ("En ménage", "Joris-Karl Huysmans", "En ménage"),
+    ("En route", "Joris-Karl Huysmans", "En route"),
+    ("Fort comme la mort", "Guy de Maupassant", "Fort comme la mort"),
+    ("Frères_Zemganno", "Edmond de Goncourt", "Les Frères Zemganno"),
+    ("Georgette", "Paul de Kock", "Georgette"),
+    ("Germinie Lacerteux", "Edmond et Jules de Goncourt", "Germinie Lacerteux"),
+    (
+        "Histoire_de_la_grandeur_et_de_la_decadence_de_Cesar_Birotteau",
+        "Honoré de Balzac",
+        "Histoire de la grandeur et de la décadence de César Birotteau",
+    ),
+    ("L'Ame etrangère", "Guy de Maupassant", "L'Âme étrangère"),
+    ("L'education_sentimentale", "Gustave Flaubert", "L'Éducation sentimentale"),
+    ("La Cause du beau Guillaume", "Louis-Émile-Edmond Duranty", "La Cause du beau Guillaume"),
+    ("La_Faustin", "Edmond de Goncourt", "La Faustin"),
+    ("Le cataclysme", "J.-H. Rosny aîné", "Le Cataclysme"),
+    ("Le jardin de Mary", "J.-H. Rosny aîné", "Le Jardin de Mary"),
+    ("Le pays des arts", "Louis-Émile-Edmond Duranty", "Le Pays des arts"),
+    ("Le trésor dans la neige", "J.-H. Rosny aîné", "Le Trésor dans la neige"),
+    ("Le voyage", "J.-H. Rosny aîné", "Le Voyage"),
+    ("Madame_Bovary", "Gustave Flaubert", "Madame Bovary"),
+    ("Mont Oriol", "Guy de Maupassant", "Mont-Oriol"),
+    ("Nymphée", "J.-H. Rosny", "Nymphée"),
+    ("Paule Méré", "Victor Cherbuliez", "Paule Méré"),
+    ("Petite Rose", "Champfleury", "La Petite Rose"),
+    ("Roman d'une honnête femme", "Victor Cherbuliez", "Le Roman d'une honnête femme"),
+    ("SALAMMBÔ", "Gustave Flaubert", "Salammbô"),
+    ("Une Vie", "Guy de Maupassant", "Une vie"),
+    ("Zizine", "Paul de Kock", "Zizine"),
+    ("la_belle_Nivernaise", "Alphonse Daudet", "La Belle-Nivernaise"),
+    ("le_Nabab", "Alphonse Daudet", "Le Nabab"),
+    (
+        "malheur d'Henriette Gérard",
+        "Louis-Émile-Edmond Duranty",
+        "Le Malheur d'Henriette Gérard",
+    ),
+    ("rois_en_exil", "Alphonse Daudet", "Les Rois en exil"),
+    ("soutien_de_famille", "Alphonse Daudet", "Le Soutien de famille"),
+)
+
+
+def cle_robuste(texte: str) -> str:
+    """Produit une clef insensible aux accents, espaces, tirets et majuscules."""
+    texte = unicodedata.normalize("NFKD", texte)
+    texte = "".join(car for car in texte if not unicodedata.combining(car))
+    return " ".join(re.findall(r"[a-z0-9]+", texte.casefold()))
+
+
+def construire_catalogue() -> dict[str, Livre]:
+    catalogue: dict[str, Livre] = {}
+    for nom_source, auteur, titre in ENTREES:
+        cle = cle_robuste(nom_source)
+        if cle in catalogue:
+            raise RuntimeError(f"Doublon interne dans le catalogue : {nom_source}")
+        catalogue[cle] = Livre(auteur=auteur, titre=titre)
+    return catalogue
+
+
+CATALOGUE = construire_catalogue()
+
+
+def slug(texte: str) -> str:
+    """Transforme un auteur ou un titre en composant de nom de fichier lisible."""
+    texte = unicodedata.normalize("NFC", texte.strip())
+    texte = re.sub(r"[^\w]+", "_", texte, flags=re.UNICODE)
+    return re.sub(r"_+", "_", texte).strip("_")
+
+
+def nom_cible(livre: Livre, extension: str) -> str:
+    return f"{slug(livre.auteur)}_{slug(livre.titre)}{extension.lower()}"
+
+
+def cle_systeme(nom: str) -> str:
+    """Approxime les comparaisons de noms de macOS (casse et normalisation)."""
+    return unicodedata.normalize("NFD", nom).casefold()
+
+
+def analyser(dossier: Path) -> tuple[list[tuple[Path, Path]], list[Path], list[str]]:
+    noms_deja_renommes = {
+        cle_systeme(nom_cible(livre, ".txt")) for livre in CATALOGUE.values()
+    }
+    fichiers = sorted(
+        (
+            p
+            for p in dossier.rglob("*")
+            if p.is_file() and p.suffix.casefold() == ".txt"
+        ),
+        key=lambda p: cle_systeme(str(p.relative_to(dossier))),
+    )
+    plan: list[tuple[Path, Path]] = []
+    inconnus: list[Path] = []
+
+    for source in fichiers:
+        livre = CATALOGUE.get(cle_robuste(source.stem))
+        if livre is None:
+            # Permet de relancer le script sans erreur après un premier passage.
+            if cle_systeme(source.name) in noms_deja_renommes:
+                continue
+            inconnus.append(source)
+            continue
+        cible = source.with_name(nom_cible(livre, source.suffix))
+        if cle_systeme(source.name) != cle_systeme(cible.name):
+            plan.append((source, cible))
+
+    erreurs: list[str] = []
+    cibles: dict[str, Path] = {}
+    sources = {cle_systeme(str(source)) for source, _ in plan}
+
+    for source, cible in plan:
+        cle = cle_systeme(str(cible))
+        autre = cibles.get(cle)
+        if autre is not None:
+            erreurs.append(
+                f"Deux fichiers visent le même nom : {autre.name!r} et {source.name!r}"
+            )
+        cibles[cle] = source
+
+        # Une cible qui est elle-même une source du plan sera libérée pendant
+        # la première phase. Toute autre cible existante bloquerait l'opération.
+        if cible.exists() and cle not in sources:
+            erreurs.append(
+                f"La cible existe déjà : {str(cible.relative_to(dossier))!r}"
+            )
+
+    return plan, inconnus, erreurs
+
+
+def afficher(
+    plan: list[tuple[Path, Path]], inconnus: list[Path], dossier: Path
+) -> None:
+    for source, cible in plan:
+        print(
+            f"{source.relative_to(dossier)}  ->  {cible.relative_to(dossier)}"
+        )
+    if inconnus:
+        print("\nFichiers sans correspondance :", file=sys.stderr)
+        for fichier in inconnus:
+            print(f"  - {fichier.relative_to(dossier)}", file=sys.stderr)
+
+
+def appliquer(plan: list[tuple[Path, Path]]) -> None:
+    """Renomme en deux phases et tente un retour arriere en cas d'erreur."""
+    jeton = uuid.uuid4().hex
+    temporaires: list[tuple[Path, Path, Path]] = []
+
+    try:
+        for numero, (source, cible) in enumerate(plan):
+            temporaire = source.with_name(f".renommage-{jeton}-{numero}.tmp")
+            source.rename(temporaire)
+            temporaires.append((source, temporaire, cible))
+
+        termines: list[tuple[Path, Path, Path]] = []
+        for source, temporaire, cible in temporaires:
+            temporaire.rename(cible)
+            termines.append((source, temporaire, cible))
+    except OSError:
+        # Les cibles deja creees sont remises sous leur ancien nom ; les autres
+        # fichiers sont encore temporaires et sont egalement restaures.
+        for source, temporaire, cible in reversed(temporaires):
+            try:
+                if cible.exists() and not source.exists():
+                    cible.rename(source)
+                elif temporaire.exists() and not source.exists():
+                    temporaire.rename(source)
+            except OSError:
+                pass
+        raise
+
+
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Renomme les .txt du corpus sous la forme Auteur_Titre.txt."
+    )
+    parser.add_argument(
+        "dossier",
+        nargs="?",
+        type=Path,
+        default=DOSSIER_PAR_DEFAUT,
+        help=f"dossier des romans (défaut : {DOSSIER_PAR_DEFAUT})",
+    )
+    parser.add_argument(
+        "--appliquer",
+        "--apply",
+        action="store_true",
+        help="effectue réellement les renommages (sinon : simple aperçu)",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = arguments()
+    dossier = args.dossier.expanduser().resolve()
+
+    if not dossier.is_dir():
+        print(f"Erreur : dossier introuvable : {dossier}", file=sys.stderr)
+        return 2
+
+    plan, inconnus, erreurs = analyser(dossier)
+    afficher(plan, inconnus, dossier)
+
+    if erreurs:
+        print("\nRenommage annulé :", file=sys.stderr)
+        for erreur in erreurs:
+            print(f"  - {erreur}", file=sys.stderr)
+        return 2
+
+    if inconnus:
+        print(
+            "\nRenommage annulé : complétez le catalogue avant de traiter "
+            "les fichiers inconnus.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not plan:
+        print("Aucun fichier à renommer.")
+        return 0
+
+    if not args.appliquer:
+        print(f"\nAperçu : {len(plan)} fichier(s). Rien n'a été modifié.")
+        print("Relancez avec --appliquer pour confirmer.")
+        return 0
+
+    try:
+        appliquer(plan)
+    except OSError as exc:
+        print(f"Erreur pendant le renommage : {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\nTerminé : {len(plan)} fichier(s) renommé(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
